@@ -182,7 +182,8 @@ export default function App() {
         }
       },
       (err) => {
-        console.error("Native error", err);
+        console.error("Native TTS Error detected in App:", err);
+        // Only stop if it's a real error, though speakNative filters cancel/interrupt now.
         setIsPlaying(false);
       }
     );

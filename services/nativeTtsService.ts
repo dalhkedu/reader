@@ -29,9 +29,14 @@ export const speakNative = (
     onEnd();
   };
 
-  utterance.onerror = (e) => {
-    console.error("Native TTS Error", e);
-    onError(e);
+  utterance.onerror = (event) => {
+    // Ignore errors that happen due to normal flow control
+    if (event.error === 'canceled' || event.error === 'interrupted') {
+      return;
+    }
+    
+    console.error("Native TTS Error:", event.error);
+    onError(event.error || 'Unknown Native TTS Error');
   };
 
   window.speechSynthesis.speak(utterance);
