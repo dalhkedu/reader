@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { AudioConfig, VoiceOption } from '../types';
+import { getNativeVoices } from '../services/nativeTtsService';
 
 interface ControlsProps {
   isPlaying: boolean;
@@ -11,7 +12,7 @@ interface ControlsProps {
   total: number;
 }
 
-const VOICES: VoiceOption[] = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
+const GEMINI_VOICES: VoiceOption[] = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
 const SPEEDS = [1.0, 1.25, 1.5, 2.0];
 
 export const Controls: React.FC<ControlsProps> = ({
@@ -23,9 +24,35 @@ export const Controls: React.FC<ControlsProps> = ({
   progress,
   total,
 }) => {
+  const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>(GEMINI_VOICES);
+
+  // Load voices if in native mode
+  useEffect(() => {
+    if (config.useNative) {
+      const loadNativeVoices = () => {
+        const voices = getNativeVoices();
+        if (voices.length > 0) {
+          setAvailableVoices(voices.map(v => v.name));
+          // If current voice isn't in list, select first
+          if (!voices.some(v => v.name === config.voice)) {
+            onConfigChange({ ...config, voice: voices[0].name });
+          }
+        }
+      };
+
+      loadNativeVoices();
+      window.speechSynthesis.onvoiceschanged = loadNativeVoices;
+    } else {
+      setAvailableVoices(GEMINI_VOICES);
+      if (!GEMINI_VOICES.includes(config.voice)) {
+        onConfigChange({ ...config, voice: 'Puck' });
+      }
+    }
+  }, [config.useNative]);
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur-md border-t border-gray-800 p-4 md:p-6 shadow-2xl z-50">
-      <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+    <div className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur-md border-t border-gray-800 p-4 shadow-2xl z-50">
+      <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
         
         {/* Playback Controls */}
         <div className="flex items-center gap-4">
@@ -61,15 +88,19 @@ export const Controls: React.FC<ControlsProps> = ({
 
         {/* Settings */}
         <div className="flex items-center gap-4 flex-wrap justify-center">
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Voice</label>
+          <div className="flex flex-col gap-1 w-48">
+            <label className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
+              {config.useNative ? 'Browser Voice' : 'Gemini Voice'}
+            </label>
             <select
               value={config.voice}
               onChange={(e) => onConfigChange({ ...config, voice: e.target.value as VoiceOption })}
-              className="bg-gray-800 text-sm text-gray-200 rounded px-3 py-1.5 border border-gray-700 focus:border-emerald-500 focus:outline-none"
+              className="bg-gray-800 text-sm text-gray-200 rounded px-3 py-1.5 border border-gray-700 focus:border-emerald-500 focus:outline-none w-full truncate"
             >
-              {VOICES.map(v => (
-                <option key={v} value={v}>{v}</option>
+              {availableVoices.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
               ))}
             </select>
           </div>

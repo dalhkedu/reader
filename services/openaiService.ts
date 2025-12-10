@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { AudioConfig } from '../types';
 
 // Helper to add a WAV header to raw PCM data so it can be played by an HTMLAudioElement
@@ -65,9 +65,11 @@ export const generateAudio = async (
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
-      contents: { parts: [{ text }] },
+      // Strictly follow the array structure for contents
+      contents: [{ parts: [{ text }] }],
       config: {
-        responseModalities: [Modality.AUDIO],
+        // Use string 'AUDIO' to ensure robustness in browser environments
+        responseModalities: ['AUDIO' as any],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName: config.voice },
@@ -76,23 +78,32 @@ export const generateAudio = async (
       },
     });
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    const firstPart = response.candidates?.[0]?.content?.parts?.[0];
     
-    if (!base64Audio) {
-      throw new Error('No audio data received from Gemini API');
+    // Check for inlineData (Audio)
+    if (firstPart?.inlineData?.data) {
+       const base64Audio = firstPart.inlineData.data;
+       const pcmData = decodeBase64(base64Audio);
+       return createWavBlob(pcmData, 24000, 1);
     }
 
-    // Convert Base64 to Raw PCM Bytes
-    const pcmData = decodeBase64(base64Audio);
+    // Check if we got text back instead (error/refusal)
+    if (firstPart?.text) {
+        throw new Error(`Gemini returned text instead of audio: "${firstPart.text.substring(0, 50)}...". This usually means safety filters triggered or the input was interpreted as a question.`);
+    }
 
-    // Wrap PCM in WAV container (24kHz is standard for Gemini TTS)
-    return createWavBlob(pcmData, 24000, 1);
+    throw new Error('No audio data received from Gemini API (Empty response)');
 
   } catch (error) {
     console.error('Gemini TTS Error:', error);
     // Add context to the error message if it looks like an API error
-    if (error instanceof Error && (error.message.includes('403') || error.message.includes('401'))) {
-        throw new Error('Gemini API Authentication failed. Please check your API key.');
+    if (error instanceof Error) {
+        if (error.message.includes('403') || error.message.includes('401')) {
+            throw new Error('Gemini API Authentication failed. Please check your API key.');
+        }
+        if (error.message.includes('503')) {
+            throw new Error('Gemini Service Unavailable. Please try again later.');
+        }
     }
     throw error;
   }

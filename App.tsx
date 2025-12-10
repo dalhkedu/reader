@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { parsePdf, chunkText } from './services/pdfService';
+import React, { useState, useEffect, useRef } from 'react';
+import { parsePdf } from './services/pdfService';
 import { generateAudio } from './services/openaiService';
+import { speakNative, stopNative, resumeNative, pauseNative } from './services/nativeTtsService';
 import { ApiKeyInput } from './components/ApiKeyInput';
 import { ReaderView } from './components/ReaderView';
 import { Controls } from './components/Controls';
-import { AudioConfig, TextChunk, AudioCacheItem } from './types';
+import { Sidebar } from './components/Sidebar';
+import { AudioConfig, TextChunk, AudioCacheItem, PdfOutline } from './types';
 
 const STORAGE_KEY = 'lumina_gemini_key';
 
@@ -12,21 +14,24 @@ export default function App() {
   // --- State ---
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [chunks, setChunks] = useState<TextChunk[]>([]);
+  const [outline, setOutline] = useState<PdfOutline[]>([]); // New Outline State
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isProcessingPdf, setIsProcessingPdf] = useState<boolean>(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   const [config, setConfig] = useState<AudioConfig>({
-    voice: 'Puck', // Default Gemini voice
+    voice: 'Puck',
     speed: 1.0,
+    useNative: false,
   });
 
   // --- Refs ---
-  // Store cached audio URLs. Key is chunk index.
   const audioCache = useRef<Map<number, AudioCacheItem>>(new Map());
   const audioPlayer = useRef<HTMLAudioElement | null>(null);
-  // To track if we should continue playing after a load
+  
   const isPlayingRef = useRef<boolean>(false); 
+  const currentIndexRef = useRef<number>(0);
 
   // --- Initialization ---
   useEffect(() => {
@@ -34,7 +39,6 @@ export default function App() {
     if (savedKey) setApiKey(savedKey);
 
     audioPlayer.current = new Audio();
-    audioPlayer.current.onended = handleAudioEnded;
     
     // Cleanup
     return () => {
@@ -42,20 +46,39 @@ export default function App() {
         audioPlayer.current.pause();
         audioPlayer.current = null;
       }
-      // Revoke all blob URLs to avoid memory leaks
+      stopNative();
       audioCache.current.forEach((item) => URL.revokeObjectURL(item.blobUrl));
     };
   }, []);
 
-  // Sync ref with state
+  // Sync refs
   useEffect(() => {
     isPlayingRef.current = isPlaying;
-    if (!isPlaying && audioPlayer.current) {
-      audioPlayer.current.pause();
-    } else if (isPlaying && audioPlayer.current && audioPlayer.current.paused && audioPlayer.current.src) {
-       audioPlayer.current.play().catch(e => console.error("Play error:", e));
+    currentIndexRef.current = currentIndex;
+  }, [isPlaying, currentIndex]);
+
+  // Handle HTML Audio Ended
+  useEffect(() => {
+    if (!audioPlayer.current) return;
+
+    const onEnded = () => {
+      handleNextChunk();
+    };
+
+    audioPlayer.current.addEventListener('ended', onEnded);
+    return () => {
+      audioPlayer.current?.removeEventListener('ended', onEnded);
+    };
+  }, [chunks.length]);
+
+  const handleNextChunk = () => {
+    const nextIndex = currentIndexRef.current + 1;
+    if (nextIndex < chunks.length) {
+      setCurrentIndex(nextIndex);
+    } else {
+      setIsPlaying(false);
     }
-  }, [isPlaying]);
+  };
 
   // --- Logic ---
 
@@ -70,17 +93,19 @@ export default function App() {
 
     setIsProcessingPdf(true);
     setChunks([]);
+    setOutline([]); // Reset outline
     setCurrentIndex(0);
     setIsPlaying(false);
+    stopNative();
     
     // Clear cache
     audioCache.current.forEach((item) => URL.revokeObjectURL(item.blobUrl));
     audioCache.current.clear();
 
     try {
-      const text = await parsePdf(file);
-      const textChunks = chunkText(text);
+      const { chunks: textChunks, outline: pdfOutline } = await parsePdf(file);
       setChunks(textChunks);
+      setOutline(pdfOutline);
     } catch (err) {
       console.error(err);
       alert('Error parsing PDF. Please ensure it is a valid text-based PDF.');
@@ -89,17 +114,21 @@ export default function App() {
     }
   };
 
-  const fetchAudioForChunk = async (index: number, priority: boolean = false) => {
+  // --- GEMINI PLAYBACK LOGIC ---
+  const fetchAudioForChunk = async (index: number, forcePlay: boolean = false) => {
     if (index >= chunks.length || !apiKey) return;
     
-    // Check if already exists or fetching
-    if (audioCache.current.has(index)) return;
+    if (audioCache.current.has(index)) {
+      const item = audioCache.current.get(index);
+      if (item && !item.isFetching && item.blobUrl && forcePlay) {
+         playBlob(item.blobUrl);
+      }
+      return;
+    }
 
-    // Mark as fetching
     audioCache.current.set(index, { blobUrl: '', isFetching: true });
 
     try {
-        // Double check apiKey before calling service
         if (!apiKey) throw new Error("No API key");
 
         const blob = await generateAudio(chunks[index].text, apiKey, config);
@@ -107,81 +136,122 @@ export default function App() {
         
         audioCache.current.set(index, { blobUrl: url, isFetching: false });
 
-        // If this was a priority fetch (current chunk) and we are supposed to be playing
-        if (priority && index === currentIndex && isPlayingRef.current && audioPlayer.current) {
-            audioPlayer.current.src = url;
-            audioPlayer.current.playbackRate = config.speed; // Ensure speed is applied
-            audioPlayer.current.play();
+        if (index === currentIndexRef.current && isPlayingRef.current && !config.useNative) {
+            playBlob(url);
         }
     } catch (err) {
         console.error(`Failed to fetch audio for chunk ${index}`, err);
-        audioCache.current.delete(index); // Remove failure so we can retry
-        if (priority) setIsPlaying(false);
+        audioCache.current.delete(index);
+        
+        if (index === currentIndexRef.current && isPlayingRef.current && !config.useNative) {
+            setIsPlaying(false);
+            alert(`Gemini Playback failed. ${err instanceof Error ? err.message : ''}`);
+        }
     }
   };
 
-  const playChunk = async (index: number) => {
+  const playBlob = async (url: string) => {
     if (!audioPlayer.current) return;
+    
+    if (audioPlayer.current.src !== url) {
+        audioPlayer.current.src = url;
+    }
+    audioPlayer.current.playbackRate = config.speed;
 
-    const cacheItem = audioCache.current.get(index);
-
-    if (cacheItem && !cacheItem.isFetching && cacheItem.blobUrl) {
-      // Audio is ready
-      audioPlayer.current.src = cacheItem.blobUrl;
-      audioPlayer.current.playbackRate = config.speed;
-      try {
+    try {
         await audioPlayer.current.play();
-      } catch (e) {
-        console.error("Playback failed", e);
+    } catch (e: any) {
+        if (e.name !== 'AbortError') console.error("Play error:", e);
+    }
+  };
+
+  // --- NATIVE PLAYBACK LOGIC ---
+  const playNativeChunk = (index: number) => {
+    if (index >= chunks.length) {
+      setIsPlaying(false);
+      return;
+    }
+    
+    speakNative(
+      chunks[index].text,
+      config,
+      () => {
+        // On End
+        if (isPlayingRef.current) {
+          handleNextChunk();
+        }
+      },
+      (err) => {
+        console.error("Native error", err);
         setIsPlaying(false);
+      }
+    );
+  };
+
+  // --- ORCHESTRATOR ---
+  useEffect(() => {
+    if (chunks.length === 0) return;
+
+    if (isPlaying) {
+      if (config.useNative) {
+        // Native Mode
+        // Ensure Gemini is stopped
+        if (audioPlayer.current) audioPlayer.current.pause();
+        
+        // Use resume if just paused? SpeechSynthesis is flaky with resume/pause on some browsers.
+        // Safer to just speak current chunk.
+        playNativeChunk(currentIndex);
+
+      } else {
+        // Gemini Mode
+        stopNative();
+        
+        // Fetch/Play Gemini
+        const cacheItem = audioCache.current.get(currentIndex);
+        if (cacheItem && !cacheItem.isFetching && cacheItem.blobUrl) {
+          playBlob(cacheItem.blobUrl);
+        } else {
+          fetchAudioForChunk(currentIndex, true);
+        }
+        // Preload next
+        if (currentIndex + 1 < chunks.length) {
+          fetchAudioForChunk(currentIndex + 1);
+        }
       }
     } else {
-      // Audio needs fetching
-      // We keep isPlaying true so that when fetch finishes, it auto-plays
-      fetchAudioForChunk(index, true);
-    }
-
-    // Buffer next chunk
-    fetchAudioForChunk(index + 1);
-  };
-
-  const handleAudioEnded = () => {
-    setCurrentIndex((prev) => {
-      const next = prev + 1;
-      if (next < chunks.length) {
-        return next;
-      } else {
-        setIsPlaying(false);
-        return prev;
-      }
-    });
-  };
-
-  // Effect to trigger playback when index changes AND we are in playing state
-  useEffect(() => {
-    if (chunks.length > 0 && isPlaying) {
-      playChunk(currentIndex);
+      // Paused
+      if (audioPlayer.current) audioPlayer.current.pause();
+      stopNative(); // Cancel clears the queue
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, isPlaying, chunks.length]);
+  }, [currentIndex, isPlaying, config.useNative]);
 
-  // Effect: When config (speed/voice) changes, clear cache because audio is now different
+  // Handle Config Switch (Reset audio)
   useEffect(() => {
     if (chunks.length === 0) return;
     
     const wasPlaying = isPlaying;
     setIsPlaying(false);
-    
-    // Clear cache
-    audioCache.current.forEach((item) => URL.revokeObjectURL(item.blobUrl));
-    audioCache.current.clear();
+    stopNative();
+    if (audioPlayer.current) audioPlayer.current.pause();
+
+    // Clear Gemini cache if switching options that affect audio file
+    if (!config.useNative) {
+      audioCache.current.forEach((item) => URL.revokeObjectURL(item.blobUrl));
+      audioCache.current.clear();
+    }
 
     if (wasPlaying) {
-        // Give a brief moment for state to settle then resume
-        setTimeout(() => setIsPlaying(true), 100);
+        setTimeout(() => setIsPlaying(true), 250);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.voice, config.speed]);
+  }, [config.voice, config.speed, config.useNative]);
+
+
+  const handleChunkSelect = (index: number) => {
+    setCurrentIndex(index);
+    setIsPlaying(true);
+  };
 
   const handleReset = () => {
     setIsPlaying(false);
@@ -190,82 +260,131 @@ export default function App() {
         audioPlayer.current.pause();
         audioPlayer.current.currentTime = 0;
     }
+    stopNative();
   };
 
+  // --- RENDER ---
+
+  const hasContent = chunks.length > 0;
+
   return (
-    <div className="min-h-screen bg-gray-950 text-slate-200 selection:bg-emerald-500/30">
+    <div className="flex flex-col h-screen bg-gray-950 text-slate-200 selection:bg-emerald-500/30 overflow-hidden">
       
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-gray-950/80 backdrop-blur border-b border-gray-800 p-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+      <header className="flex-none bg-gray-950/80 backdrop-blur border-b border-gray-800 p-3 z-50">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
+             {hasContent && (
+               <button 
+                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                 className="md:hidden p-2 text-gray-400 hover:text-white"
+               >
+                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+               </button>
+             )}
             <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-blue-600 rounded-lg flex items-center justify-center">
                 <span className="font-serif font-bold text-white text-lg">L</span>
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-white hidden sm:block">Lumina Reader</h1>
+            <h1 className="text-xl font-bold tracking-tight text-white hidden sm:block">Lumina</h1>
           </div>
+          
           <div className="flex items-center gap-4">
-            <ApiKeyInput onKeySet={handleKeySet} existingKey={apiKey} />
+            <div className="flex items-center gap-2 mr-2 border-r border-gray-800 pr-4">
+                <span className={`text-xs font-bold ${config.useNative ? 'text-white' : 'text-gray-500'}`}>Native</span>
+                <button 
+                    onClick={() => setConfig({...config, useNative: !config.useNative})}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${config.useNative ? 'bg-emerald-600' : 'bg-gray-700'}`}
+                >
+                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${config.useNative ? 'translate-x-5' : 'translate-x-1'}`} />
+                </button>
+            </div>
+            
+            <div className={`${config.useNative ? 'opacity-30 pointer-events-none' : 'opacity-100'} transition-opacity`}>
+               <ApiKeyInput onKeySet={handleKeySet} existingKey={apiKey} />
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      {/* Main Layout */}
+      <div className="flex-1 flex overflow-hidden">
         
-        {chunks.length === 0 && (
-          <div className="max-w-lg mx-auto mt-20 text-center">
-            <div className="border-2 border-dashed border-gray-700 rounded-2xl p-12 bg-gray-900/50 hover:bg-gray-900 transition-colors">
-              <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6 text-emerald-500">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                </svg>
-              </div>
-              <h2 className="text-2xl font-bold text-white mb-2">Upload your PDF</h2>
-              <p className="text-gray-400 mb-6">Select a book or document to start listening.</p>
-              
-              <label className="inline-block">
-                <span className="bg-white text-gray-900 px-6 py-3 rounded-lg font-semibold cursor-pointer hover:bg-emerald-50 transition-colors shadow-lg hover:shadow-xl hover:scale-105 transform duration-200">
-                  {isProcessingPdf ? 'Processing...' : 'Choose File'}
-                </span>
-                <input 
-                  type="file" 
-                  accept="application/pdf" 
-                  onChange={handleFileUpload}
-                  disabled={isProcessingPdf}
-                  className="hidden" 
-                />
-              </label>
-              
-              {isProcessingPdf && (
-                <div className="mt-4 text-emerald-500 text-sm animate-pulse">
-                  Extracting text and analyzing chunks...
-                </div>
-              )}
-            </div>
-            
-            {!apiKey && (
-              <div className="mt-8 p-4 bg-orange-900/20 border border-orange-900/50 rounded text-orange-200 text-sm">
-                Please configure your Google Gemini API key in the top right to enable audio features.
-              </div>
-            )}
-          </div>
+        {/* Sidebar */}
+        {hasContent && (
+          <Sidebar 
+            chunks={chunks}
+            outline={outline}
+            currentIndex={currentIndex}
+            onChunkSelect={handleChunkSelect}
+            isOpen={isSidebarOpen}
+            onCloseMobile={() => setIsSidebarOpen(false)}
+          />
         )}
 
-        {chunks.length > 0 && (
-          <>
-            <ReaderView chunks={chunks} currentIndex={currentIndex} />
-            <Controls 
-              isPlaying={isPlaying} 
-              onPlayPause={() => setIsPlaying(!isPlaying)} 
-              onReset={handleReset}
-              config={config}
-              onConfigChange={setConfig}
-              progress={currentIndex}
-              total={chunks.length}
-            />
-          </>
-        )}
-      </main>
+        {/* Content Area */}
+        <main className="flex-1 overflow-y-auto relative w-full">
+          {!hasContent && (
+             <div className="max-w-lg mx-auto mt-20 text-center px-4">
+             <div className="border-2 border-dashed border-gray-700 rounded-2xl p-12 bg-gray-900/50 hover:bg-gray-900 transition-colors">
+               <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6 text-emerald-500">
+                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
+                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                 </svg>
+               </div>
+               <h2 className="text-2xl font-bold text-white mb-2">Upload PDF</h2>
+               <p className="text-gray-400 mb-6">Select a book to start listening.</p>
+               
+               <label className="inline-block">
+                 <span className="bg-white text-gray-900 px-6 py-3 rounded-lg font-semibold cursor-pointer hover:bg-emerald-50 transition-colors shadow-lg hover:shadow-xl hover:scale-105 transform duration-200">
+                   {isProcessingPdf ? 'Processing...' : 'Choose File'}
+                 </span>
+                 <input 
+                   type="file" 
+                   accept="application/pdf" 
+                   onChange={handleFileUpload}
+                   disabled={isProcessingPdf}
+                   className="hidden" 
+                 />
+               </label>
+               
+               {isProcessingPdf && (
+                 <div className="mt-4 text-emerald-500 text-sm animate-pulse">
+                   Extracting text and analyzing chunks...
+                 </div>
+               )}
+             </div>
+             
+             {!apiKey && !config.useNative && (
+               <div className="mt-8 p-4 bg-orange-900/20 border border-orange-900/50 rounded text-orange-200 text-sm">
+                 Configure Gemini API key above OR toggle "Native" switch to use your browser's offline voice.
+               </div>
+             )}
+           </div>
+          )}
+
+          {hasContent && (
+             <ReaderView 
+               chunks={chunks} 
+               currentIndex={currentIndex} 
+               onChunkSelect={handleChunkSelect}
+             />
+          )}
+        </main>
+      </div>
+
+      {hasContent && (
+        <Controls 
+          isPlaying={isPlaying} 
+          onPlayPause={() => setIsPlaying(!isPlaying)} 
+          onReset={handleReset}
+          config={config}
+          onConfigChange={setConfig}
+          progress={currentIndex}
+          total={chunks.length}
+        />
+      )}
     </div>
   );
 }
