@@ -1,4 +1,4 @@
-import { TextChunk, PdfOutline, PdfParseResult } from '../types';
+import { TextChunk, PdfOutline, PdfParseResult, PdfMetadata } from '../types';
 
 declare const pdfjsLib: any;
 
@@ -89,6 +89,30 @@ const processOutline = async (pdf: any, nodes: any[]): Promise<PdfOutline[]> => 
   return result;
 };
 
+const generateCoverImage = async (pdf: any): Promise<string | null> => {
+  try {
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 1.5 }); // Good quality thumbnail
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    
+    if (!context) return null;
+
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+
+    await page.render({
+      canvasContext: context,
+      viewport: viewport,
+    }).promise;
+
+    return canvas.toDataURL('image/jpeg', 0.8);
+  } catch (e) {
+    console.warn("Could not generate cover image", e);
+    return null;
+  }
+};
+
 export const parsePdf = async (file: File): Promise<PdfParseResult> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -118,6 +142,11 @@ export const parsePdf = async (file: File): Promise<PdfParseResult> => {
     }
   }
 
+  // CHECK FOR SCANNED PDF
+  if (allChunks.length === 0) {
+    throw new Error('SCANNED_PDF_DETECTED');
+  }
+
   // 2. Extract Outline (Table of Contents)
   let outline: PdfOutline[] = [];
   try {
@@ -129,5 +158,18 @@ export const parsePdf = async (file: File): Promise<PdfParseResult> => {
     console.error("Error reading outline:", error);
   }
 
-  return { chunks: allChunks, outline };
+  // 3. Extract Metadata & Cover
+  let metadata: PdfMetadata = { title: file.name.replace('.pdf', ''), coverUrl: null };
+  try {
+    const meta = await pdf.getMetadata();
+    if (meta?.info?.Title) {
+      metadata.title = meta.info.Title;
+    }
+    const coverUrl = await generateCoverImage(pdf);
+    metadata.coverUrl = coverUrl;
+  } catch (error) {
+    console.warn("Error reading metadata", error);
+  }
+
+  return { chunks: allChunks, outline, metadata };
 };

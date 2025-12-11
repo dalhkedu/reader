@@ -6,7 +6,7 @@ import { ApiKeyInput } from './components/ApiKeyInput';
 import { ReaderView } from './components/ReaderView';
 import { Controls } from './components/Controls';
 import { Sidebar } from './components/Sidebar';
-import { AudioConfig, TextChunk, AudioCacheItem, PdfOutline } from './types';
+import { AudioConfig, TextChunk, AudioCacheItem, PdfOutline, PdfMetadata } from './types';
 
 const STORAGE_KEY = 'lumina_gemini_key';
 
@@ -14,11 +14,13 @@ export default function App() {
   // --- State ---
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [chunks, setChunks] = useState<TextChunk[]>([]);
-  const [outline, setOutline] = useState<PdfOutline[]>([]); // New Outline State
+  const [outline, setOutline] = useState<PdfOutline[]>([]);
+  const [metadata, setMetadata] = useState<PdfMetadata | undefined>(undefined);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isProcessingPdf, setIsProcessingPdf] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [scannedError, setScannedError] = useState(false);
   
   const [config, setConfig] = useState<AudioConfig>({
     voice: 'Puck',
@@ -93,7 +95,9 @@ export default function App() {
 
     setIsProcessingPdf(true);
     setChunks([]);
-    setOutline([]); // Reset outline
+    setOutline([]);
+    setMetadata(undefined);
+    setScannedError(false);
     setCurrentIndex(0);
     setIsPlaying(false);
     stopNative();
@@ -103,12 +107,17 @@ export default function App() {
     audioCache.current.clear();
 
     try {
-      const { chunks: textChunks, outline: pdfOutline } = await parsePdf(file);
+      const { chunks: textChunks, outline: pdfOutline, metadata: pdfMeta } = await parsePdf(file);
       setChunks(textChunks);
       setOutline(pdfOutline);
-    } catch (err) {
+      setMetadata(pdfMeta);
+    } catch (err: any) {
       console.error(err);
-      alert('Error parsing PDF. Please ensure it is a valid text-based PDF.');
+      if (err.message === 'SCANNED_PDF_DETECTED') {
+        setScannedError(true);
+      } else {
+        alert('Error parsing PDF. Please ensure it is a valid text-based PDF.');
+      }
     } finally {
       setIsProcessingPdf(false);
     }
@@ -183,7 +192,6 @@ export default function App() {
       },
       (err) => {
         console.error("Native TTS Error detected in App:", err);
-        // Only stop if it's a real error, though speakNative filters cancel/interrupt now.
         setIsPlaying(false);
       }
     );
@@ -195,19 +203,11 @@ export default function App() {
 
     if (isPlaying) {
       if (config.useNative) {
-        // Native Mode
-        // Ensure Gemini is stopped
         if (audioPlayer.current) audioPlayer.current.pause();
-        
-        // Use resume if just paused? SpeechSynthesis is flaky with resume/pause on some browsers.
-        // Safer to just speak current chunk.
         playNativeChunk(currentIndex);
 
       } else {
-        // Gemini Mode
         stopNative();
-        
-        // Fetch/Play Gemini
         const cacheItem = audioCache.current.get(currentIndex);
         if (cacheItem && !cacheItem.isFetching && cacheItem.blobUrl) {
           playBlob(cacheItem.blobUrl);
@@ -220,9 +220,8 @@ export default function App() {
         }
       }
     } else {
-      // Paused
       if (audioPlayer.current) audioPlayer.current.pause();
-      stopNative(); // Cancel clears the queue
+      stopNative(); 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, isPlaying, config.useNative]);
@@ -236,7 +235,6 @@ export default function App() {
     stopNative();
     if (audioPlayer.current) audioPlayer.current.pause();
 
-    // Clear Gemini cache if switching options that affect audio file
     if (!config.useNative) {
       audioCache.current.forEach((item) => URL.revokeObjectURL(item.blobUrl));
       audioCache.current.clear();
@@ -267,6 +265,31 @@ export default function App() {
   // --- RENDER ---
 
   const hasContent = chunks.length > 0;
+
+  if (scannedError) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="bg-gray-900 border border-red-900/50 p-8 rounded-2xl max-w-md text-center shadow-2xl">
+           <div className="w-16 h-16 bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
+               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+             </svg>
+           </div>
+           <h2 className="text-xl font-bold text-white mb-2">Scanned PDF Detected</h2>
+           <p className="text-gray-400 mb-6">
+             This PDF appears to consist entirely of images (scanned pages) with no extractable text. 
+             Lumina requires text-based PDFs to generate audio.
+           </p>
+           <button 
+             onClick={() => window.location.reload()}
+             className="bg-gray-800 hover:bg-gray-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+           >
+             Try Another Book
+           </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-slate-200 selection:bg-emerald-500/30 overflow-hidden">
@@ -352,7 +375,7 @@ export default function App() {
                
                {isProcessingPdf && (
                  <div className="mt-4 text-emerald-500 text-sm animate-pulse">
-                   Extracting text and analyzing chunks...
+                   Extracting text, analyzing chapters, and generating cover...
                  </div>
                )}
              </div>
@@ -384,6 +407,7 @@ export default function App() {
           onConfigChange={setConfig}
           progress={currentIndex}
           total={chunks.length}
+          metadata={metadata}
         />
       )}
     </div>

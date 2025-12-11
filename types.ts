@@ -23,7 +23,13 @@ export interface PdfOutline {
   items: PdfOutline[];
 }
 
+export interface PdfMetadata {
+  title: string;
+  coverUrl: string | null;
+}
+
 export interface PdfParseResult {
   chunks: TextChunk[];
   outline: PdfOutline[];
+  metadata: PdfMetadata;
 }
