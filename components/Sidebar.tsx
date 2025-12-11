@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { TextChunk, PdfOutline } from '../types';
+import { TextChunk, PdfOutline, Bookmark } from '../types';
 
 interface SidebarProps {
   chunks: TextChunk[];
   outline: PdfOutline[];
+  bookmarks: Bookmark[];
   currentIndex: number;
   onChunkSelect: (index: number) => void;
+  onDeleteBookmark: (bookmarkId: string) => void;
   isOpen: boolean;
   onCloseMobile: () => void;
 }
@@ -25,22 +27,25 @@ const flattenOutline = (nodes: PdfOutline[]): PdfOutline[] => {
 export const Sidebar: React.FC<SidebarProps> = ({ 
   chunks, 
   outline,
+  bookmarks,
   currentIndex, 
   onChunkSelect,
+  onDeleteBookmark,
   isOpen,
   onCloseMobile
 }) => {
-  const [activeTab, setActiveTab] = useState<'chapters' | 'segments'>('chapters');
+  const [activeTab, setActiveTab] = useState<'chapters' | 'segments' | 'bookmarks'>('chapters');
   const scrollRef = useRef<HTMLDivElement>(null);
   
-  // Create a ref map to track all chapter nodes for scrolling
+  // Create ref maps to track nodes for scrolling
   const chapterRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const segmentRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const currentPage = chunks[currentIndex]?.pageNumber || 1;
 
   // Auto-switch to segments if no outline
   useEffect(() => {
-    if (outline.length === 0 && chunks.length > 0) {
+    if (outline.length === 0 && chunks.length > 0 && activeTab === 'chapters') {
       setActiveTab('segments');
     }
   }, [outline, chunks]);
@@ -62,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [outline, currentPage]);
 
 
-  // Scroll active item into view
+  // Scroll active item into view (Chapters)
   useEffect(() => {
     if (activeTab === 'chapters' && activeChapterNode) {
         // Generate a key based on title+page to find the ref
@@ -70,25 +75,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const element = chapterRefs.current.get(key);
 
         if (element && scrollRef.current) {
-            const parent = scrollRef.current;
-            const parentTop = parent.scrollTop;
-            const parentBottom = parentTop + parent.clientHeight;
-            const elementTop = element.offsetTop;
-            const elementBottom = elementTop + element.clientHeight;
-
-            // Scroll if out of view
-            if (elementTop < parentTop + 20 || elementBottom > parentBottom - 20) {
-                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            scrollToElement(element, scrollRef.current);
         }
     }
   }, [activeChapterNode, activeTab]);
+
+  // Scroll active item into view (Segments)
+  useEffect(() => {
+    if (activeTab === 'segments') {
+      const element = segmentRefs.current.get(currentIndex);
+      if (element && scrollRef.current) {
+        scrollToElement(element, scrollRef.current);
+      }
+    }
+  }, [currentIndex, activeTab]);
+
+  // Helper to scroll nicely
+  const scrollToElement = (element: HTMLElement, parent: HTMLElement) => {
+    const parentTop = parent.scrollTop;
+    const parentBottom = parentTop + parent.clientHeight;
+    const elementTop = element.offsetTop;
+    const elementBottom = elementTop + element.clientHeight;
+
+    // Scroll if out of view
+    if (elementTop < parentTop + 40 || elementBottom > parentBottom - 40) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   const handleChapterClick = (pageNumber: number | null) => {
     if (pageNumber === null) return;
     
     // Find the first chunk that matches or is closest after the chapter start page
-    // This handles cases where the text might start slightly after the page break
     const targetIndex = chunks.findIndex(c => c.pageNumber >= pageNumber);
     
     if (targetIndex !== -1) {
@@ -119,7 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               onClick={() => setActiveTab('chapters')}
               disabled={outline.length === 0}
-              className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
+              className={`flex-1 py-3 text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
                 activeTab === 'chapters' 
                   ? 'border-emerald-500 text-white' 
                   : 'border-transparent text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed'
@@ -129,13 +147,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('segments')}
-              className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
+              className={`flex-1 py-3 text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
                 activeTab === 'segments' 
                   ? 'border-emerald-500 text-white' 
                   : 'border-transparent text-gray-500 hover:text-gray-300'
               }`}
             >
               Segments
+            </button>
+            <button
+              onClick={() => setActiveTab('bookmarks')}
+              className={`flex-1 py-3 text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
+                activeTab === 'bookmarks' 
+                  ? 'border-emerald-500 text-white' 
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Bookmarks
             </button>
           </div>
         </div>
@@ -161,19 +189,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="space-y-1 pb-10">
               {chunks.map((chunk, index) => {
                 const isActive = index === currentIndex;
-                const activeRef = useRef<HTMLDivElement>(null);
-
-                // Auto scroll segments
-                useEffect(() => {
-                  if (isActive && activeRef.current && activeTab === 'segments') {
-                      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  }
-                }, [isActive]);
-
+                
                 return (
                   <div
                     key={chunk.id}
-                    ref={activeRef}
+                    ref={(el) => {
+                      if (el) segmentRefs.current.set(index, el);
+                      else segmentRefs.current.delete(index);
+                    }}
                     onClick={() => {
                       onChunkSelect(index);
                       onCloseMobile();
@@ -196,6 +219,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 );
               })}
             </div>
+          )}
+
+          {/* Bookmarks View */}
+          {activeTab === 'bookmarks' && (
+             <div className="space-y-2 pb-10">
+                {bookmarks.length === 0 ? (
+                    <div className="text-center p-6 text-gray-500 text-sm">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 mx-auto mb-2 opacity-50">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0111.186 0z" />
+                        </svg>
+                        <p>No bookmarks yet.</p>
+                        <p className="text-xs mt-1 opacity-70">Tap the bookmark icon on any paragraph to save it here.</p>
+                    </div>
+                ) : (
+                    bookmarks.sort((a,b) => a.chunkIndex - b.chunkIndex).map((b) => (
+                        <div key={b.id} className="group relative bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 hover:border-emerald-500/30 rounded p-3 transition-all cursor-pointer"
+                             onClick={() => { onChunkSelect(b.chunkIndex); onCloseMobile(); }}>
+                            <div className="flex justify-between items-start mb-1">
+                                <span className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">
+                                    Page {chunks[b.chunkIndex]?.pageNumber || '?'}
+                                </span>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onDeleteBookmark(b.id); }}
+                                    className="text-gray-500 hover:text-red-400 p-1 -mr-2 -mt-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                                        <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-300 line-clamp-3 font-serif leading-relaxed">
+                                {b.label}
+                            </p>
+                        </div>
+                    ))
+                )}
+             </div>
           )}
         </div>
       </aside>

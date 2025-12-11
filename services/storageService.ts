@@ -1,4 +1,4 @@
-import { Book, PdfParseResult } from '../types';
+import { Book, PdfParseResult, Bookmark } from '../types';
 
 const DB_NAME = 'LuminaDB';
 const DB_VERSION = 1;
@@ -38,6 +38,7 @@ export const saveBook = async (pdfResult: PdfParseResult): Promise<Book> => {
     metadata: pdfResult.metadata,
     chunks: pdfResult.chunks,
     outline: pdfResult.outline,
+    bookmarks: [],
     progressIndex: 0,
     createdAt: Date.now(),
   };
@@ -100,6 +101,51 @@ export const updateProgress = async (id: string, index: number): Promise<void> =
       }
     };
     getReq.onerror = () => reject('Error updating progress');
+  });
+};
+
+export const addBookmark = async (bookId: string, bookmark: Bookmark): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const getReq = store.get(bookId);
+
+    getReq.onsuccess = () => {
+      const data = getReq.result as Book;
+      if (data) {
+        // Initialize if missing (backward compatibility)
+        if (!data.bookmarks) data.bookmarks = [];
+        data.bookmarks.push(bookmark);
+        store.put(data);
+        resolve();
+      } else {
+        reject('Book not found');
+      }
+    };
+    getReq.onerror = () => reject('Error adding bookmark');
+  });
+};
+
+export const removeBookmark = async (bookId: string, bookmarkId: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const getReq = store.get(bookId);
+
+    getReq.onsuccess = () => {
+      const data = getReq.result as Book;
+      if (data) {
+        if (!data.bookmarks) data.bookmarks = [];
+        data.bookmarks = data.bookmarks.filter(b => b.id !== bookmarkId);
+        store.put(data);
+        resolve();
+      } else {
+        reject('Book not found');
+      }
+    };
+    getReq.onerror = () => reject('Error removing bookmark');
   });
 };
 

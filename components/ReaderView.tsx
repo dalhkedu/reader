@@ -1,20 +1,24 @@
 import React, { useEffect, useRef } from 'react';
-import { TextChunk } from '../types';
+import { TextChunk, Bookmark } from '../types';
 
 interface ReaderViewProps {
   chunks: TextChunk[];
   currentIndex: number;
   maxReadIndex: number;
+  bookmarks: Bookmark[];
   onChunkSelect: (index: number) => void;
   onToggleRead: (index: number) => void;
+  onToggleBookmark: (index: number) => void;
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({ 
   chunks, 
   currentIndex, 
   maxReadIndex,
+  bookmarks,
   onChunkSelect,
-  onToggleRead
+  onToggleRead,
+  onToggleBookmark
 }) => {
   const activeRef = useRef<HTMLDivElement>(null);
 
@@ -33,6 +37,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         {chunks.map((chunk, index) => {
           const isActive = index === currentIndex;
           const isRead = index <= maxReadIndex;
+          const isBookmarked = bookmarks.some(b => b.chunkIndex === index);
           
           return (
             <div
@@ -46,7 +51,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               `}
             >
               {/* Checkbox / Status Indicator */}
-              <div className="flex-none pt-1">
+              <div className="flex-none pt-1 flex flex-col gap-2 items-center">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -71,12 +76,40 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 className="flex-1 cursor-pointer"
                 onClick={() => onChunkSelect(index)}
               >
-                <div className="flex justify-between items-baseline mb-2 opacity-50 text-[10px] uppercase font-mono tracking-wider">
-                    <span>
-                        {isActive ? 'Now Playing' : (isRead ? 'Read' : 'Unread')}
-                    </span>
-                    <span>Page {chunk.pageNumber}</span>
+                <div className="flex justify-between items-start mb-2">
+                    <div className="opacity-50 text-[10px] uppercase font-mono tracking-wider pt-1">
+                        <span className="mr-3">
+                            {isActive ? 'Now Playing' : (isRead ? 'Read' : 'Unread')}
+                        </span>
+                        <span>Page {chunk.pageNumber}</span>
+                    </div>
+
+                    {/* Bookmark Toggle */}
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleBookmark(index);
+                        }}
+                        className={`
+                             p-1.5 rounded transition-colors
+                             ${isBookmarked 
+                                ? 'text-amber-400 hover:text-amber-300' 
+                                : 'text-gray-600 hover:text-amber-500/50 opacity-0 group-hover:opacity-100'}
+                        `}
+                        title={isBookmarked ? "Remove Bookmark" : "Add Bookmark"}
+                    >
+                        {isBookmarked ? (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                                <path fillRule="evenodd" d="M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z" clipRule="evenodd" />
+                            </svg>
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0111.186 0z" />
+                            </svg>
+                        )}
+                    </button>
                 </div>
+
                 <p className={`
                   font-serif text-lg md:text-xl leading-relaxed whitespace-pre-line transition-colors
                   ${isActive ? 'text-gray-100' : (isRead ? 'text-gray-400' : 'text-gray-300 group-hover:text-gray-200')}

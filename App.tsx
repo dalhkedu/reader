@@ -2,14 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { parsePdf } from './services/pdfService';
 import { generateAudio } from './services/openaiService';
 import { speakNative, stopNative } from './services/nativeTtsService';
-import { saveBook, getLibrary, updateProgress, deleteBook } from './services/storageService';
+import { saveBook, getLibrary, updateProgress, deleteBook, addBookmark, removeBookmark } from './services/storageService';
 import { ApiKeyInput } from './components/ApiKeyInput';
 import { ReaderView } from './components/ReaderView';
 import { Controls } from './components/Controls';
 import { Sidebar } from './components/Sidebar';
 import { LibraryView } from './components/LibraryView';
 import { ConfirmationModal } from './components/ConfirmationModal';
-import { AudioConfig, TextChunk, AudioCacheItem, PdfOutline, PdfMetadata, Book } from './types';
+import { AudioConfig, TextChunk, AudioCacheItem, PdfOutline, PdfMetadata, Book, Bookmark } from './types';
 
 const STORAGE_KEY = 'lumina_gemini_key';
 
@@ -35,6 +35,7 @@ export default function App() {
   const [chunks, setChunks] = useState<TextChunk[]>([]);
   const [outline, setOutline] = useState<PdfOutline[]>([]);
   const [metadata, setMetadata] = useState<PdfMetadata | undefined>(undefined);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [maxReadIndex, setMaxReadIndex] = useState<number>(-1); // Tracks the furthest read paragraph
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -174,16 +175,11 @@ export default function App() {
     setChunks(book.chunks);
     setOutline(book.outline);
     setMetadata(book.metadata);
+    setBookmarks(book.bookmarks || []);
     
     // 3. Resume from history
-    // progressIndex in DB is now treated as maxReadIndex
     const savedProgress = book.progressIndex ?? -1;
     setMaxReadIndex(savedProgress);
-    
-    // Resume playback at the saved position (or 0)
-    // If savedProgress is -1 (new book), start at 0.
-    // If savedProgress is 5 (read 0-5), we start at 5 (re-read last?) or 6?
-    // Let's safe bet: Start at the last read position so context isn't lost.
     setCurrentIndex(savedProgress < 0 ? 0 : savedProgress);
     
     // 4. Switch View
@@ -205,13 +201,52 @@ export default function App() {
 
   const handleToggleRead = (index: number) => {
     if (index <= maxReadIndex) {
-      // Uncheck: If I uncheck index 5, it means I haven't read 5.
-      // So max read becomes 4 (index - 1).
       setMaxReadIndex(index - 1);
     } else {
-      // Check: If I check index 5, it means I have read up to 5.
       setMaxReadIndex(index);
     }
+  };
+
+  const handleToggleBookmark = async (index: number) => {
+    if (!activeBookId) return;
+
+    const existingBookmark = bookmarks.find(b => b.chunkIndex === index);
+    
+    if (existingBookmark) {
+      // Remove
+      try {
+        await removeBookmark(activeBookId, existingBookmark.id);
+        setBookmarks(prev => prev.filter(b => b.id !== existingBookmark.id));
+      } catch (e) {
+        console.error("Failed to remove bookmark", e);
+      }
+    } else {
+      // Add
+      const chunk = chunks[index];
+      const newBookmark: Bookmark = {
+        id: crypto.randomUUID(),
+        chunkIndex: index,
+        label: chunk.text.substring(0, 100),
+        createdAt: Date.now()
+      };
+      
+      try {
+        await addBookmark(activeBookId, newBookmark);
+        setBookmarks(prev => [...prev, newBookmark]);
+      } catch (e) {
+        console.error("Failed to add bookmark", e);
+      }
+    }
+  };
+
+  const handleDeleteBookmark = async (bookmarkId: string) => {
+     if (!activeBookId) return;
+     try {
+        await removeBookmark(activeBookId, bookmarkId);
+        setBookmarks(prev => prev.filter(b => b.id !== bookmarkId));
+     } catch (e) {
+        console.error("Failed to delete bookmark", e);
+     }
   };
 
   // --- GEMINI PLAYBACK LOGIC ---
@@ -359,6 +394,23 @@ export default function App() {
     ? (chunks.reduce((acc, c) => acc + c.text.length, 0) / 1_000_000) * 0.35 
     : 0;
 
+  // Reading Time Estimate
+  const calculateReadingTime = () => {
+    if (chunks.length === 0) return null;
+    const totalWords = chunks.reduce((acc, c) => acc + c.text.split(/\s+/).length, 0);
+    const wordsPerMinute = 150; // Average audiobook speed
+    const baseMinutes = totalWords / wordsPerMinute;
+    // Adjust for playback speed
+    const adjustedMinutes = baseMinutes / config.speed;
+    
+    const hours = Math.floor(adjustedMinutes / 60);
+    const minutes = Math.floor(adjustedMinutes % 60);
+    
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  };
+
+  const readingTime = calculateReadingTime();
+
   // --- RENDER ---
   return (
     <div className="flex flex-col h-[100dvh] bg-gray-950 text-slate-200 selection:bg-emerald-500/30 overflow-hidden relative">
@@ -424,6 +476,16 @@ export default function App() {
                </button>
             )}
 
+            {/* Reading Time */}
+            {currentView === 'reader' && readingTime && (
+                <div className="hidden md:flex flex-col items-end leading-none">
+                    <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Time</span>
+                    <span className="text-xs text-gray-300 font-mono">
+                        {readingTime}
+                    </span>
+                </div>
+            )}
+
             {/* Cost Estimate */}
             {currentView === 'reader' && !config.useNative && (
                 <div className="hidden md:flex flex-col items-end leading-none">
@@ -483,8 +545,10 @@ export default function App() {
               <Sidebar 
                 chunks={chunks}
                 outline={outline}
+                bookmarks={bookmarks}
                 currentIndex={currentIndex}
                 onChunkSelect={handleChunkSelect}
+                onDeleteBookmark={handleDeleteBookmark}
                 isOpen={isSidebarOpen}
                 onCloseMobile={() => setIsSidebarOpen(false)}
               />
@@ -494,8 +558,10 @@ export default function App() {
                   chunks={chunks} 
                   currentIndex={currentIndex}
                   maxReadIndex={maxReadIndex}
+                  bookmarks={bookmarks}
                   onChunkSelect={handleChunkSelect} 
                   onToggleRead={handleToggleRead}
+                  onToggleBookmark={handleToggleBookmark}
                 />
               </main>
            </>

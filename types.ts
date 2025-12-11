@@ -26,6 +26,9 @@ export interface PdfOutline {
 export interface PdfMetadata {
   title: string;
   coverUrl: string | null;
+  author?: string;
+  publisher?: string;
+  edition?: string;
 }
 
 export interface PdfParseResult {
@@ -34,11 +37,19 @@ export interface PdfParseResult {
   metadata: PdfMetadata;
 }
 
+export interface Bookmark {
+  id: string;
+  chunkIndex: number;
+  label: string;
+  createdAt: number;
+}
+
 export interface Book {
   id: string; // UUID
   metadata: PdfMetadata;
   chunks: TextChunk[];
   outline: PdfOutline[];
+  bookmarks: Bookmark[]; // New field
   progressIndex: number; // The last read chunk index
   createdAt: number;
 }
