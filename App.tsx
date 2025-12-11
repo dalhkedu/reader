@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { parsePdf } from './services/pdfService';
 import { generateAudio } from './services/openaiService';
@@ -195,8 +196,13 @@ export default function App() {
   };
 
   const handleDeleteBook = async (id: string) => {
-    await deleteBook(id);
-    loadLibrary();
+    try {
+      await deleteBook(id);
+      await loadLibrary();
+    } catch (e) {
+      console.error("Failed to delete book", e);
+      alert("Failed to delete book. Please try again.");
+    }
   };
 
   const handleToggleRead = (index: number) => {

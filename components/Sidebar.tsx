@@ -12,13 +12,29 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-// Helper to flatten outline and sort by page number for accurate detection
-const flattenOutline = (nodes: PdfOutline[]): PdfOutline[] => {
-  let result: PdfOutline[] = [];
+// Helper: Add unique IDs to outline nodes based on their tree position
+interface EnrichedOutline extends PdfOutline {
+  uniqueId: string; // e.g., "root-0", "root-0-1"
+  items: EnrichedOutline[];
+}
+
+const enrichOutline = (nodes: PdfOutline[], parentId: string = 'root'): EnrichedOutline[] => {
+  return nodes.map((node, index) => {
+    const uniqueId = `${parentId}-${index}`;
+    return {
+      ...node,
+      uniqueId,
+      items: enrichOutline(node.items || [], uniqueId)
+    };
+  });
+};
+
+const flattenEnrichedOutline = (nodes: EnrichedOutline[]): EnrichedOutline[] => {
+  let result: EnrichedOutline[] = [];
   for (const node of nodes) {
     result.push(node);
     if (node.items && node.items.length > 0) {
-      result = result.concat(flattenOutline(node.items));
+      result = result.concat(flattenEnrichedOutline(node.items));
     }
   }
   return result;
@@ -37,50 +53,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [activeTab, setActiveTab] = useState<'chapters' | 'segments' | 'bookmarks'>('chapters');
   const scrollRef = useRef<HTMLDivElement>(null);
   
-  // Create ref maps to track nodes for scrolling
+  // Refs for scrolling
   const chapterRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const segmentRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const currentPage = chunks[currentIndex]?.pageNumber || 1;
 
-  // Auto-switch to segments if no outline
+  // Enrich outline with stable IDs
+  const enrichedOutline = useMemo(() => enrichOutline(outline), [outline]);
+
+  // Determine active chapter based on current page
+  const activeChapterId = useMemo(() => {
+    const flat = flattenEnrichedOutline(enrichedOutline);
+    // Sort primarily by page number to handle order correctly
+    flat.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+    
+    let candidateId: string | null = null;
+    
+    for (const node of flat) {
+      if (node.pageNumber !== null && node.pageNumber <= currentPage) {
+        candidateId = node.uniqueId;
+      }
+    }
+    return candidateId;
+  }, [enrichedOutline, currentPage]);
+
+  // Auto-switch tabs if needed
   useEffect(() => {
     if (outline.length === 0 && chunks.length > 0 && activeTab === 'chapters') {
       setActiveTab('segments');
     }
   }, [outline, chunks]);
 
-  // Determine the active chapter node
-  const activeChapterNode = useMemo(() => {
-    // Flatten and strictly sort by page number to ensure logic works
-    const flat = flattenOutline(outline).sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
-    
-    let candidate: PdfOutline | null = null;
-    
-    // Find the deepst/last node that starts on or before the current page
-    for (const node of flat) {
-      if (node.pageNumber !== null && node.pageNumber <= currentPage) {
-        candidate = node;
-      }
-    }
-    return candidate;
-  }, [outline, currentPage]);
-
-
-  // Scroll active item into view (Chapters)
+  // Scroll Active Chapter into view
   useEffect(() => {
-    if (activeTab === 'chapters' && activeChapterNode) {
-        // Generate a key based on title+page to find the ref
-        const key = `${activeChapterNode.title}-${activeChapterNode.pageNumber}`;
-        const element = chapterRefs.current.get(key);
-
+    if (activeTab === 'chapters' && activeChapterId) {
+        const element = chapterRefs.current.get(activeChapterId);
         if (element && scrollRef.current) {
             scrollToElement(element, scrollRef.current);
         }
     }
-  }, [activeChapterNode, activeTab]);
+  }, [activeChapterId, activeTab]);
 
-  // Scroll active item into view (Segments)
+  // Scroll Active Segment into view
   useEffect(() => {
     if (activeTab === 'segments') {
       const element = segmentRefs.current.get(currentIndex);
@@ -90,15 +105,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [currentIndex, activeTab]);
 
-  // Helper to scroll nicely
   const scrollToElement = (element: HTMLElement, parent: HTMLElement) => {
-    const parentTop = parent.scrollTop;
-    const parentBottom = parentTop + parent.clientHeight;
-    const elementTop = element.offsetTop;
-    const elementBottom = elementTop + element.clientHeight;
-
-    // Scroll if out of view
-    if (elementTop < parentTop + 40 || elementBottom > parentBottom - 40) {
+    const parentRect = parent.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    
+    // Check if out of view
+    if (elementRect.top < parentRect.top || elementRect.bottom > parentRect.bottom) {
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   };
@@ -106,9 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleChapterClick = (pageNumber: number | null) => {
     if (pageNumber === null) return;
     
-    // Find the first chunk that matches or is closest after the chapter start page
     const targetIndex = chunks.findIndex(c => c.pageNumber >= pageNumber);
-    
     if (targetIndex !== -1) {
       onChunkSelect(targetIndex);
       onCloseMobile();
@@ -131,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       <aside className={sidebarClasses}>
-        {/* Header / Tabs */}
+        {/* Tabs */}
         <div className="flex-none bg-gray-900 border-b border-gray-800">
           <div className="flex">
             <button
@@ -175,10 +185,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {activeTab === 'chapters' && (
             <div className="space-y-1 pb-10">
                <OutlineList 
-                 nodes={outline} 
+                 nodes={enrichedOutline} 
                  onSelect={handleChapterClick} 
                  level={0} 
-                 activeNode={activeChapterNode}
+                 activeId={activeChapterId}
                  chapterRefs={chapterRefs}
                />
             </div>
@@ -265,26 +275,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
 // Recursive Outline Component
 const OutlineList: React.FC<{ 
-  nodes: PdfOutline[], 
+  nodes: EnrichedOutline[], 
   onSelect: (page: number | null) => void,
   level: number,
-  activeNode: PdfOutline | null,
+  activeId: string | null,
   chapterRefs: React.MutableRefObject<Map<string, HTMLDivElement>>
-}> = ({ nodes, onSelect, level, activeNode, chapterRefs }) => {
+}> = ({ nodes, onSelect, level, activeId, chapterRefs }) => {
   if (!nodes || nodes.length === 0) return null;
 
   return (
     <>
-      {nodes.map((node, i) => {
-        const isActive = node === activeNode;
-        const key = `${node.title}-${node.pageNumber}`;
+      {nodes.map((node) => {
+        const isActive = node.uniqueId === activeId;
         
         return (
-        <React.Fragment key={i}>
+        <React.Fragment key={node.uniqueId}>
           <div
             ref={(el) => {
-                if (el) chapterRefs.current.set(key, el);
-                else chapterRefs.current.delete(key);
+                if (el) chapterRefs.current.set(node.uniqueId, el);
+                else chapterRefs.current.delete(node.uniqueId);
             }}
             onClick={() => onSelect(node.pageNumber)}
             className={`
@@ -329,7 +338,7 @@ const OutlineList: React.FC<{
                 nodes={node.items} 
                 onSelect={onSelect} 
                 level={level + 1} 
-                activeNode={activeNode}
+                activeId={activeId}
                 chapterRefs={chapterRefs}
             />
           )}

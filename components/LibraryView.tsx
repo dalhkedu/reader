@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Book } from '../types';
 
@@ -61,8 +62,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           
           return (
             <div key={book.id} className="group relative bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 hover:shadow-2xl transition-all duration-300 flex flex-col">
+              
+              {/* Delete Button - Always Visible, High Z-Index */}
+              <button 
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if(window.confirm(`Are you sure you want to delete "${book.metadata.title || 'this book'}"? This action cannot be undone.`)) {
+                    onDeleteBook(book.id);
+                  }
+                }}
+                className="absolute top-2 right-2 z-30 p-2 bg-gray-900/90 hover:bg-red-600 text-gray-400 hover:text-white rounded-full border border-gray-700 hover:border-red-500 transition-colors shadow-lg cursor-pointer"
+                title="Delete Book"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              </button>
+
               {/* Cover Area */}
-              <div onClick={() => onSelectBook(book)} className="aspect-[2/3] bg-gray-950 relative cursor-pointer overflow-hidden">
+              <div onClick={() => onSelectBook(book)} className="aspect-[2/3] bg-gray-950 relative cursor-pointer overflow-hidden z-0">
                 {book.metadata.coverUrl ? (
                   <img src={book.metadata.coverUrl} alt={book.metadata.title} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
                 ) : (
@@ -86,9 +105,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
               {/* Info Area */}
               <div className="p-4 flex-1 flex flex-col">
-                <h3 onClick={() => onSelectBook(book)} className="text-white font-medium line-clamp-2 leading-tight mb-auto cursor-pointer hover:text-emerald-400 transition-colors">
+                <h3 onClick={() => onSelectBook(book)} className="text-white font-medium line-clamp-2 leading-tight mb-auto cursor-pointer hover:text-emerald-400 transition-colors pr-6">
                   {book.metadata.title || 'Untitled Document'}
                 </h3>
+                
+                {/* Additional Metadata */}
+                <div className="mt-1 text-xs text-gray-500 line-clamp-1">
+                  {book.metadata.author || 'Unknown Author'}
+                </div>
                 
                 <div className="mt-4 space-y-2">
                    {/* Progress Bar */}
@@ -99,20 +123,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <span>{progressPercent}% Complete</span>
                    </div>
                 </div>
-
-                {/* Delete Button (Corner) */}
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if(confirm('Delete this book from your library?')) onDeleteBook(book.id);
-                  }}
-                  className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-900/80 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur"
-                  title="Delete Book"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                  </svg>
-                </button>
               </div>
             </div>
           )})}
