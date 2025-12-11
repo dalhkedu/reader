@@ -1,12 +1,13 @@
-
-import React from 'react';
-import { Book } from '../types';
+import React, { useState } from 'react';
+import { Book, PdfMetadata } from '../types';
 
 interface LibraryViewProps {
   books: Book[];
   onSelectBook: (book: Book) => void;
   onDeleteBook: (id: string) => void;
+  onUpdateMetadata: (id: string, metadata: PdfMetadata) => void;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onDownload: (book: Book) => void;
   isProcessing: boolean;
 }
 
@@ -14,11 +15,95 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   books, 
   onSelectBook, 
   onDeleteBook, 
+  onUpdateMetadata,
   onUpload, 
+  onDownload,
   isProcessing 
 }) => {
+  const [editingBook, setEditingBook] = useState<Book | null>(null);
+  const [editForm, setEditForm] = useState<PdfMetadata>({ title: '', coverUrl: null });
+
+  const handleEditClick = (book: Book) => {
+    setEditingBook(book);
+    setEditForm({ ...book.metadata });
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingBook) {
+      onUpdateMetadata(editingBook.id, editForm);
+      setEditingBook(null);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto p-6 md:p-10 w-full h-full overflow-y-auto">
+      
+      {/* EDIT MODAL */}
+      {editingBook && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+           <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-2xl max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-serif font-bold text-white">Edit Book Details</h3>
+                <button onClick={() => setEditingBook(null)} className="text-gray-500 hover:text-white">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Title</label>
+                    <input 
+                      type="text" 
+                      value={editForm.title}
+                      onChange={(e) => setEditForm({...editForm, title: e.target.value})}
+                      className="w-full bg-gray-950 border border-gray-700 text-white px-3 py-2 rounded focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Author</label>
+                    <input 
+                      type="text" 
+                      value={editForm.author || ''}
+                      onChange={(e) => setEditForm({...editForm, author: e.target.value})}
+                      className="w-full bg-gray-950 border border-gray-700 text-white px-3 py-2 rounded focus:border-emerald-500 focus:outline-none"
+                      placeholder="Unknown Author"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Publisher</label>
+                        <input 
+                        type="text" 
+                        value={editForm.publisher || ''}
+                        onChange={(e) => setEditForm({...editForm, publisher: e.target.value})}
+                        className="w-full bg-gray-950 border border-gray-700 text-white px-3 py-2 rounded focus:border-emerald-500 focus:outline-none"
+                        placeholder="Optional"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Edition</label>
+                        <input 
+                        type="text" 
+                        value={editForm.edition || ''}
+                        onChange={(e) => setEditForm({...editForm, edition: e.target.value})}
+                        className="w-full bg-gray-950 border border-gray-700 text-white px-3 py-2 rounded focus:border-emerald-500 focus:outline-none"
+                        placeholder="Optional"
+                        />
+                    </div>
+                  </div>
+                  
+                  <div className="flex justify-end gap-3 pt-4">
+                     <button type="button" onClick={() => setEditingBook(null)} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button>
+                     <button type="submit" className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-medium shadow-lg shadow-emerald-900/20">Save Changes</button>
+                  </div>
+              </form>
+           </div>
+        </div>
+      )}
+
       <div className="mb-8">
         <h2 className="text-3xl font-serif font-bold text-white mb-2">My Library</h2>
         <p className="text-gray-400">Manage your collection and resume reading.</p>
@@ -63,22 +148,56 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           return (
             <div key={book.id} className="group relative bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 hover:shadow-2xl transition-all duration-300 flex flex-col">
               
-              {/* Delete Button - Always Visible, High Z-Index */}
-              <button 
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if(window.confirm(`Are you sure you want to delete "${book.metadata.title || 'this book'}"? This action cannot be undone.`)) {
-                    onDeleteBook(book.id);
-                  }
-                }}
-                className="absolute top-2 right-2 z-30 p-2 bg-gray-900/90 hover:bg-red-600 text-gray-400 hover:text-white rounded-full border border-gray-700 hover:border-red-500 transition-colors shadow-lg cursor-pointer"
-                title="Delete Book"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              </button>
+              <div className="absolute top-2 right-2 z-30 flex gap-2">
+                 {/* Download Button */}
+                 {book.pdfData && (
+                    <button
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onDownload(book);
+                        }}
+                        className="p-2 bg-gray-900/90 hover:bg-blue-600 text-gray-400 hover:text-white rounded-full border border-gray-700 hover:border-blue-500 transition-colors shadow-lg cursor-pointer"
+                        title="Download PDF"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                        </svg>
+                    </button>
+                 )}
+
+                 {/* Edit Button */}
+                 <button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleEditClick(book);
+                    }}
+                    className="p-2 bg-gray-900/90 hover:bg-emerald-600 text-gray-400 hover:text-white rounded-full border border-gray-700 hover:border-emerald-500 transition-colors shadow-lg cursor-pointer"
+                    title="Edit Metadata"
+                 >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                    </svg>
+                 </button>
+
+                 {/* Delete Button */}
+                 <button 
+                    onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if(window.confirm(`Are you sure you want to delete "${book.metadata.title || 'this book'}"? This action cannot be undone.`)) {
+                        onDeleteBook(book.id);
+                    }
+                    }}
+                    className="p-2 bg-gray-900/90 hover:bg-red-600 text-gray-400 hover:text-white rounded-full border border-gray-700 hover:border-red-500 transition-colors shadow-lg cursor-pointer"
+                    title="Delete Book"
+                 >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    </svg>
+                 </button>
+              </div>
 
               {/* Cover Area */}
               <div onClick={() => onSelectBook(book)} className="aspect-[2/3] bg-gray-950 relative cursor-pointer overflow-hidden z-0">

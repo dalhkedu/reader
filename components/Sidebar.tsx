@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { TextChunk, PdfOutline, Bookmark } from '../types';
+import { TextChunk, PdfOutline, Bookmark, PdfMetadata } from '../types';
 
 interface SidebarProps {
   chunks: TextChunk[];
   outline: PdfOutline[];
   bookmarks: Bookmark[];
+  metadata?: PdfMetadata; // Added metadata for citation context
   currentIndex: number;
   onChunkSelect: (index: number) => void;
   onDeleteBookmark: (bookmarkId: string) => void;
@@ -44,6 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   chunks, 
   outline,
   bookmarks,
+  metadata,
   currentIndex, 
   onChunkSelect,
   onDeleteBookmark,
@@ -122,6 +124,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (targetIndex !== -1) {
       onChunkSelect(targetIndex);
       onCloseMobile();
+    }
+  };
+
+  const handleShare = async (e: React.MouseEvent, bookmark: Bookmark) => {
+    e.stopPropagation();
+    
+    // Get full text from the chunk, not just the label snippet
+    const fullText = chunks[bookmark.chunkIndex]?.text || bookmark.label;
+    
+    // Format citation
+    const citation = `“${fullText}”\n\n— ${metadata?.title || 'Unknown Title'}${metadata?.author ? `, by ${metadata.author}` : ''}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: metadata?.title || 'Book Quote',
+          text: citation,
+        });
+      } catch (err) {
+        // User canceled share
+        console.log('Share canceled');
+      }
+    } else {
+      // Fallback for desktops without native share
+      try {
+        await navigator.clipboard.writeText(citation);
+        alert('Quote copied to clipboard!');
+      } catch (err) {
+        console.error('Failed to copy', err);
+      }
     }
   };
 
@@ -250,14 +282,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 <span className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">
                                     Page {chunks[b.chunkIndex]?.pageNumber || '?'}
                                 </span>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onDeleteBookmark(b.id); }}
-                                    className="text-gray-500 hover:text-red-400 p-1 -mr-2 -mt-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                                        <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                                    </svg>
-                                </button>
+                                
+                                <div className="flex items-center gap-1 -mr-2 -mt-2">
+                                  {/* Share Button */}
+                                  <button
+                                      onClick={(e) => handleShare(e, b)}
+                                      className="text-gray-500 hover:text-emerald-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Share Quote"
+                                  >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                                        <path d="M13 4.5a2.5 2.5 0 11.702 1.737L6.97 9.604a2.518 2.518 0 010 .792l6.733 3.367a2.5 2.5 0 11-.671 1.341l-6.733-3.367a2.5 2.5 0 110-3.475l6.733-3.366A2.52 2.52 0 0113 4.5z" />
+                                      </svg>
+                                  </button>
+
+                                  {/* Delete Button */}
+                                  <button
+                                      onClick={(e) => { e.stopPropagation(); onDeleteBookmark(b.id); }}
+                                      className="text-gray-500 hover:text-red-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Remove Bookmark"
+                                  >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                                          <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                                      </svg>
+                                  </button>
+                                </div>
                             </div>
                             <p className="text-xs text-gray-300 line-clamp-3 font-serif leading-relaxed">
                                 {b.label}

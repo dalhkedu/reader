@@ -1,4 +1,5 @@
 import { TextChunk, PdfOutline, PdfParseResult, PdfMetadata } from '../types';
+import { PDFDocument } from 'pdf-lib';
 
 declare const pdfjsLib: any;
 
@@ -297,4 +298,37 @@ export const parsePdf = async (file: File): Promise<PdfParseResult> => {
   }
 
   return { chunks: allChunks, outline, metadata };
+};
+
+export const modifyAndDownloadPDF = async (pdfData: ArrayBuffer, metadata: PdfMetadata) => {
+  try {
+    const pdfDoc = await PDFDocument.load(pdfData);
+    
+    if (metadata.title) pdfDoc.setTitle(metadata.title);
+    if (metadata.author) pdfDoc.setAuthor(metadata.author);
+    if (metadata.publisher) pdfDoc.setProducer(metadata.publisher); // Producer or Creator often used for publisher
+    if (metadata.edition) pdfDoc.setSubject(`Edition: ${metadata.edition}`);
+
+    const pdfBytes = await pdfDoc.save();
+    
+    // Create Blob and Download Link
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${metadata.title || 'document'}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  } catch (e) {
+    console.error("Error modifying PDF", e);
+    alert("Failed to update PDF file. Downloading original.");
+    
+    // Fallback: Download original
+    const blob = new Blob([pdfData], { type: 'application/pdf' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${metadata.title || 'document'}.pdf`;
+    link.click();
+  }
 };

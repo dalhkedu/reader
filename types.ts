@@ -52,4 +52,5 @@ export interface Book {
   bookmarks: Bookmark[]; // New field
   progressIndex: number; // The last read chunk index
   createdAt: number;
+  pdfData?: ArrayBuffer; // The original PDF file data
 }

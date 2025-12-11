@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { parsePdf } from './services/pdfService';
+import { parsePdf, modifyAndDownloadPDF } from './services/pdfService';
 import { generateAudio } from './services/openaiService';
 import { speakNative, stopNative } from './services/nativeTtsService';
-import { saveBook, getLibrary, updateProgress, deleteBook, addBookmark, removeBookmark } from './services/storageService';
+import { saveBook, getLibrary, updateProgress, deleteBook, addBookmark, removeBookmark, updateBookMetadata } from './services/storageService';
 import { ApiKeyInput } from './components/ApiKeyInput';
 import { ReaderView } from './components/ReaderView';
 import { Controls } from './components/Controls';
@@ -145,9 +145,13 @@ export default function App() {
 
     setIsProcessingPdf(true);
     try {
+      // 1. Parse content
       const pdfResult = await parsePdf(file);
+      // 2. Read raw binary to save for later reconstruction
+      const fileBuffer = await file.arrayBuffer();
+      
       // Save to DB
-      const newBook = await saveBook(pdfResult);
+      const newBook = await saveBook(pdfResult, fileBuffer);
       // Refresh Library
       await loadLibrary();
       // Select and Open
@@ -196,13 +200,39 @@ export default function App() {
   };
 
   const handleDeleteBook = async (id: string) => {
+    // Optimistic UI Update
+    const previousLibrary = [...library];
+    setLibrary(prev => prev.filter(book => book.id !== id));
+
     try {
       await deleteBook(id);
-      await loadLibrary();
+      // Reload strictly to ensure consistency, though state is already updated
+      // await loadLibrary(); 
     } catch (e) {
       console.error("Failed to delete book", e);
-      alert("Failed to delete book. Please try again.");
+      alert("Failed to delete book. Restoring...");
+      setLibrary(previousLibrary); // Rollback
     }
+  };
+
+  const handleUpdateMetadata = async (id: string, newMeta: PdfMetadata) => {
+    try {
+        await updateBookMetadata(id, newMeta);
+        await loadLibrary();
+    } catch (e) {
+        console.error("Failed to update metadata", e);
+        alert("Failed to save changes.");
+    }
+  };
+
+  const handleDownloadBook = async (book: Book) => {
+    if (!book.pdfData) {
+        alert("This book doesn't have the original file saved.");
+        return;
+    }
+    
+    // Trigger download logic using pdf-lib
+    await modifyAndDownloadPDF(book.pdfData, book.metadata);
   };
 
   const handleToggleRead = (index: number) => {
@@ -540,7 +570,9 @@ export default function App() {
              books={library} 
              onSelectBook={openBook} 
              onDeleteBook={handleDeleteBook}
+             onUpdateMetadata={handleUpdateMetadata}
              onUpload={handleFileUpload}
+             onDownload={handleDownloadBook}
              isProcessing={isProcessingPdf}
            />
         )}
@@ -552,6 +584,7 @@ export default function App() {
                 chunks={chunks}
                 outline={outline}
                 bookmarks={bookmarks}
+                metadata={metadata}
                 currentIndex={currentIndex}
                 onChunkSelect={handleChunkSelect}
                 onDeleteBookmark={handleDeleteBookmark}
