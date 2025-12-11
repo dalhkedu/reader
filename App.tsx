@@ -22,6 +22,9 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [scannedError, setScannedError] = useState(false);
   
+  // Modal State
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  
   const [config, setConfig] = useState<AudioConfig>({
     voice: 'Puck',
     speed: 1.0,
@@ -87,6 +90,18 @@ export default function App() {
   const handleKeySet = (key: string) => {
     setApiKey(key);
     localStorage.setItem(STORAGE_KEY, key);
+    setIsKeyModalOpen(false); // Auto close on save
+  };
+
+  const handleModeSwitch = (mode: 'native' | 'gemini') => {
+    if (mode === 'native') {
+        setConfig(prev => ({ ...prev, useNative: true }));
+        setIsKeyModalOpen(false);
+    } else {
+        setConfig(prev => ({ ...prev, useNative: false }));
+        // Open modal if no key or explicitly clicked to configure
+        setIsKeyModalOpen(true);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -292,43 +307,65 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-slate-200 selection:bg-emerald-500/30 overflow-hidden">
+    <div className="flex flex-col h-screen bg-gray-950 text-slate-200 selection:bg-emerald-500/30 overflow-hidden relative">
       
+      {/* KEY CONFIG MODAL (Absolute Overlay) */}
+      {isKeyModalOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gray-900 border border-gray-800 p-6 md:p-8 rounded-2xl shadow-2xl max-w-md w-full relative" onClick={(e) => e.stopPropagation()}>
+            <ApiKeyInput 
+              onKeySet={handleKeySet} 
+              existingKey={apiKey} 
+              onClose={() => setIsKeyModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <header className="flex-none bg-gray-950/80 backdrop-blur border-b border-gray-800 p-3 z-50">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-             {hasContent && (
-               <button 
-                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                 className="md:hidden p-2 text-gray-400 hover:text-white"
-               >
-                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                </svg>
-               </button>
-             )}
-            <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-blue-600 rounded-lg flex items-center justify-center">
-                <span className="font-serif font-bold text-white text-lg">L</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-white hidden sm:block">Lumina</h1>
+      <header className="flex-none bg-gray-950/80 backdrop-blur border-b border-gray-800 h-14 flex items-center justify-between px-3 md:px-6 z-50">
+        <div className="flex items-center gap-3">
+           {hasContent && (
+             <button 
+               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+               className="md:hidden p-1.5 -ml-1.5 text-gray-400 hover:text-white"
+             >
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              </svg>
+             </button>
+           )}
+          <div className="w-7 h-7 bg-gradient-to-br from-emerald-500 to-blue-600 rounded flex items-center justify-center shadow-lg shadow-emerald-900/20">
+              <span className="font-serif font-bold text-white text-base">L</span>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 mr-2 border-r border-gray-800 pr-4">
-                <span className={`text-xs font-bold ${config.useNative ? 'text-white' : 'text-gray-500'}`}>Native</span>
-                <button 
-                    onClick={() => setConfig({...config, useNative: !config.useNative})}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${config.useNative ? 'bg-emerald-600' : 'bg-gray-700'}`}
-                >
-                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${config.useNative ? 'translate-x-5' : 'translate-x-1'}`} />
-                </button>
-            </div>
-            
-            <div className={`${config.useNative ? 'opacity-30 pointer-events-none' : 'opacity-100'} transition-opacity`}>
-               <ApiKeyInput onKeySet={handleKeySet} existingKey={apiKey} />
-            </div>
-          </div>
+          <h1 className="text-lg font-bold tracking-tight text-white hidden sm:block">Lumina</h1>
+        </div>
+        
+        {/* Engine Switcher */}
+        <div className="flex bg-gray-900 rounded-lg p-1 border border-gray-800">
+            <button
+                onClick={() => handleModeSwitch('native')}
+                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all duration-200 ${
+                    config.useNative 
+                        ? 'bg-emerald-600 text-white shadow' 
+                        : 'text-gray-400 hover:text-gray-200'
+                }`}
+            >
+                Native
+            </button>
+            <button
+                onClick={() => handleModeSwitch('gemini')}
+                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all duration-200 flex items-center gap-1 ${
+                    !config.useNative 
+                        ? 'bg-blue-600 text-white shadow' 
+                        : 'text-gray-400 hover:text-gray-200'
+                }`}
+            >
+                Gemini
+                {!apiKey && !config.useNative && (
+                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                )}
+            </button>
         </div>
       </header>
 
@@ -381,8 +418,8 @@ export default function App() {
              </div>
              
              {!apiKey && !config.useNative && (
-               <div className="mt-8 p-4 bg-orange-900/20 border border-orange-900/50 rounded text-orange-200 text-sm">
-                 Configure Gemini API key above OR toggle "Native" switch to use your browser's offline voice.
+               <div className="mt-8 p-4 bg-blue-900/20 border border-blue-900/50 rounded text-blue-200 text-sm text-center">
+                 Tip: Select <b>Gemini</b> in the top right to configure your API Key.
                </div>
              )}
            </div>
