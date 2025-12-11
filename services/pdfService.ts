@@ -130,56 +130,104 @@ const generateCoverImage = async (pdf: any): Promise<string | null> => {
   }
 };
 
+// --- METADATA ENHANCEMENT HELPERS ---
+
+// 1. Regex Heuristics from First Pages
+const extractMetadataFromContent = (text: string): Partial<PdfMetadata> => {
+  const meta: Partial<PdfMetadata> = {};
+  
+  // Try to find Author ("By [Name]")
+  // Matches "By John Doe" or "By: John Doe" at start of lines
+  const authorMatch = text.match(/(?:By|Author|Written by)[:\s]+([A-Z][a-zA-Z.]+(?:\s+[A-Z][a-zA-Z.]+)+)/i);
+  if (authorMatch) {
+    meta.author = authorMatch[1].trim();
+  }
+
+  // Try to find Edition ("2nd Edition", "Third Edition")
+  const editionMatch = text.match(/(\d+(?:st|nd|rd|th)|First|Second|Third|Fourth|Fifth|Sixth)\s+Edition/i);
+  if (editionMatch) {
+    meta.edition = editionMatch[0].trim();
+  }
+
+  // Try to find Publisher (Copyright X, Published by X)
+  const publisherMatch = text.match(/(?:Published by|Publisher|Copyright\s+(?:\(c\)|©)?\s*\d{4})\s+([A-Z][a-zA-Z0-9\s.,&]+)/i);
+  if (publisherMatch) {
+    // Clean up common noise
+    let pub = publisherMatch[1].trim();
+    pub = pub.replace(/All rights reserved.*/i, '').trim();
+    if (pub.length < 50) {
+        meta.publisher = pub;
+    }
+  }
+
+  return meta;
+};
+
+// 2. Google Books API Lookup
+const fetchGoogleBooksMetadata = async (title: string, authorHint?: string): Promise<Partial<PdfMetadata>> => {
+  try {
+    const query = `intitle:${encodeURIComponent(title)}${authorHint ? `+inauthor:${encodeURIComponent(authorHint)}` : ''}`;
+    const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${query}&maxResults=1`);
+    
+    if (!response.ok) return {};
+
+    const data = await response.json();
+    if (data.items && data.items.length > 0) {
+      const info = data.items[0].volumeInfo;
+      
+      const result: Partial<PdfMetadata> = {};
+      
+      if (info.authors && info.authors.length > 0) {
+        result.author = info.authors.join(', ');
+      }
+      
+      if (info.publisher) {
+        result.publisher = info.publisher;
+      }
+
+      // Google Books often has high-res covers
+      if (info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail) {
+         // Prefer HTTPS
+         let img = info.imageLinks.thumbnail || info.imageLinks.smallThumbnail;
+         img = img.replace('http://', 'https://');
+         result.coverUrl = img;
+      }
+
+      return result;
+    }
+  } catch (e) {
+    console.warn("Google Books API lookup failed", e);
+  }
+  return {};
+};
+
+
 export const parsePdf = async (file: File): Promise<PdfParseResult> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   
   let allChunks: TextChunk[] = [];
   let chunkIdCounter = 0;
+  let firstPagesText = ''; // For heuristic analysis
 
   // 1. Process Text Page by Page
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
     
-    // Improved joining strategy:
-    // If an item hasEOL, we add a newline. 
-    // Otherwise we add a space to separate words, or nothing if it looks like a mid-word split.
-    // For simplicity and robustness with most standard PDFs, joining with space is safer, 
-    // but detecting EOL helps with paragraph reconstruction.
+    // Naive reconstruction for extraction
+    const pageTextRaw = textContent.items.map((item: any) => item.str).join(' ');
     
-    let pageText = '';
-    
-    // Naive reconstruction: Join with space. 
-    // A more advanced approach checks 'hasEOL' but PDF.js EOL detection varies by PDF generator.
-    // We will stick to space joining but rely on 'normalizeText' to clean up artifacts.
-    // To preserve paragraphs that actually exist in the structure (rare but helpful), we can check EOL.
-    
-    // Attempt to reconstruct lines
-    let lastY = -1;
-    const lines: string[] = [];
-    let currentLine = '';
-
-    for (const item of textContent.items) {
-      if ('str' in item) {
-        // Simple line detection based on Y transformation could be done here, 
-        // but textContent.items usually come in reading order.
-        // We just append with space.
-        currentLine += item.str + (item.hasEOL ? '\n' : ' ');
-      }
+    // Collect first 3 pages for metadata analysis
+    if (i <= 3) {
+        firstPagesText += pageTextRaw + '\n';
     }
-    
-    // Fallback if the loop above didn't use item.hasEOL property effectively (depends on PDF.js version/types)
-    // The previous implementation used map().join(' '), which is robust for basic extraction.
-    // We will revert to that but apply the enhanced normalization.
-    pageText = textContent.items.map((item: any) => item.str).join(' ');
 
-    const normalized = normalizeText(pageText);
+    const normalized = normalizeText(pageTextRaw);
     
     // Chunk this specific page
     const pageChunks = chunkPageText(normalized, i, chunkIdCounter);
     
-    // Update counter for next page so IDs remain unique
     if (pageChunks.length > 0) {
       chunkIdCounter = pageChunks[pageChunks.length - 1].id + 1;
       allChunks = [...allChunks, ...pageChunks];
@@ -202,15 +250,48 @@ export const parsePdf = async (file: File): Promise<PdfParseResult> => {
     console.error("Error reading outline:", error);
   }
 
-  // 3. Extract Metadata & Cover
-  let metadata: PdfMetadata = { title: file.name.replace('.pdf', ''), coverUrl: null };
+  // 3. Extract Metadata (Multi-layered approach)
+  let metadata: PdfMetadata = { 
+    title: file.name.replace('.pdf', ''), 
+    coverUrl: null 
+  };
+
   try {
+    // Layer 1: Internal PDF Metadata
     const meta = await pdf.getMetadata();
-    if (meta?.info?.Title) {
+    if (meta?.info?.Title && meta.info.Title.trim() !== 'Untitled') {
       metadata.title = meta.info.Title;
     }
-    const coverUrl = await generateCoverImage(pdf);
-    metadata.coverUrl = coverUrl;
+    if (meta?.info?.Author) {
+      metadata.author = meta.info.Author;
+    }
+    
+    // Generate local cover first (fallback)
+    const localCover = await generateCoverImage(pdf);
+    metadata.coverUrl = localCover;
+
+    // Layer 2: Heuristics from Content
+    const heuristicMeta = extractMetadataFromContent(firstPagesText);
+    metadata = { ...metadata, ...heuristicMeta };
+
+    // Layer 3: External API (Google Books)
+    // Only fetch if we have a plausible title (longer than 3 chars)
+    if (metadata.title && metadata.title.length > 3) {
+       const googleMeta = await fetchGoogleBooksMetadata(metadata.title, metadata.author);
+       
+       // Merge strategies:
+       // - Keep Title from PDF (usually most accurate to the file)
+       // - Overwrite Author/Publisher if Google has them (usually cleaner)
+       // - Use Google Cover if available (higher res), else keep local
+       
+       metadata = {
+         ...metadata,
+         author: googleMeta.author || metadata.author,
+         publisher: googleMeta.publisher || metadata.publisher,
+         coverUrl: googleMeta.coverUrl || metadata.coverUrl // Prefer Google cover
+       };
+    }
+
   } catch (error) {
     console.warn("Error reading metadata", error);
   }
