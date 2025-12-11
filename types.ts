@@ -33,3 +33,12 @@ export interface PdfParseResult {
   outline: PdfOutline[];
   metadata: PdfMetadata;
 }
+
+export interface Book {
+  id: string; // UUID
+  metadata: PdfMetadata;
+  chunks: TextChunk[];
+  outline: PdfOutline[];
+  progressIndex: number; // The last read chunk index
+  createdAt: number;
+}

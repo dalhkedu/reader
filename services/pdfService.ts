@@ -4,6 +4,7 @@ declare const pdfjsLib: any;
 
 const normalizeText = (text: string): string => {
   return text
+    // Ligatures
     .replace(/\uFB00/g, 'ff')
     .replace(/\uFB01/g, 'fi')
     .replace(/\uFB02/g, 'fl')
@@ -11,23 +12,39 @@ const normalizeText = (text: string): string => {
     .replace(/\uFB04/g, 'ffl')
     .replace(/\uFB05/g, 'ft')
     .replace(/\uFB06/g, 'st')
+    // Smart Quotes & Apostrophes
+    .replace(/[\u2018\u2019\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201F]/g, '"')
+    // Dashes & Hyphens
+    .replace(/[\u2013\u2014]/g, '-')
+    // Ellipsis
+    .replace(/\u2026/g, '...')
+    // Spaces (NBSP, etc)
+    .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+    // Soft Hyphens (often used for line breaks in PDF, remove them)
+    .replace(/\u00AD/g, '')
+    // Normalization
     .normalize('NFKC')
+    // Remove control characters but keep newlines for paragraph detection
     .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, '');
 };
 
 const chunkPageText = (text: string, pageNumber: number, startId: number): TextChunk[] => {
+  // Split by double newline to detect paragraphs
   const rawParagraphs = text.split(/\n\s*\n/);
   const chunks: TextChunk[] = [];
   let idCounter = startId;
   const MAX_CHUNK_LENGTH = 1000;
 
   rawParagraphs.forEach((para) => {
+    // Normalize spaces within the paragraph
     const cleanedPara = para.replace(/\s+/g, ' ').trim();
     if (cleanedPara.length === 0) return;
 
     if (cleanedPara.length <= MAX_CHUNK_LENGTH) {
       chunks.push({ id: idCounter++, text: cleanedPara, pageNumber });
     } else {
+      // Split long paragraphs by sentences
       const sentences = cleanedPara.match(/[^.!?]+[.!?]+(?=\s|$)/g) || [cleanedPara];
       let currentSubChunk = '';
 
@@ -125,11 +142,38 @@ export const parsePdf = async (file: File): Promise<PdfParseResult> => {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
     
-    // Join items with space, but keep logical blocks slightly separated
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ');
-      
+    // Improved joining strategy:
+    // If an item hasEOL, we add a newline. 
+    // Otherwise we add a space to separate words, or nothing if it looks like a mid-word split.
+    // For simplicity and robustness with most standard PDFs, joining with space is safer, 
+    // but detecting EOL helps with paragraph reconstruction.
+    
+    let pageText = '';
+    
+    // Naive reconstruction: Join with space. 
+    // A more advanced approach checks 'hasEOL' but PDF.js EOL detection varies by PDF generator.
+    // We will stick to space joining but rely on 'normalizeText' to clean up artifacts.
+    // To preserve paragraphs that actually exist in the structure (rare but helpful), we can check EOL.
+    
+    // Attempt to reconstruct lines
+    let lastY = -1;
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const item of textContent.items) {
+      if ('str' in item) {
+        // Simple line detection based on Y transformation could be done here, 
+        // but textContent.items usually come in reading order.
+        // We just append with space.
+        currentLine += item.str + (item.hasEOL ? '\n' : ' ');
+      }
+    }
+    
+    // Fallback if the loop above didn't use item.hasEOL property effectively (depends on PDF.js version/types)
+    // The previous implementation used map().join(' '), which is robust for basic extraction.
+    // We will revert to that but apply the enhanced normalization.
+    pageText = textContent.items.map((item: any) => item.str).join(' ');
+
     const normalized = normalizeText(pageText);
     
     // Chunk this specific page

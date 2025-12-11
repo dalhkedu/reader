@@ -10,7 +10,7 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-// Helper to flatten outline for searching active node
+// Helper to flatten outline and sort by page number for accurate detection
 const flattenOutline = (nodes: PdfOutline[]): PdfOutline[] => {
   let result: PdfOutline[] = [];
   for (const node of nodes) {
@@ -32,7 +32,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'chapters' | 'segments'>('chapters');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const activeItemRef = useRef<HTMLDivElement>(null);
+  
+  // Create a ref map to track all chapter nodes for scrolling
+  const chapterRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const currentPage = chunks[currentIndex]?.pageNumber || 1;
 
@@ -45,11 +47,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Determine the active chapter node
   const activeChapterNode = useMemo(() => {
-    const flat = flattenOutline(outline);
+    // Flatten and strictly sort by page number to ensure logic works
+    const flat = flattenOutline(outline).sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+    
     let candidate: PdfOutline | null = null;
     
-    // We want the last node in the list that starts on or before the current page.
-    // Since outline is typically ordered by reading order, iterating through helps us find the "deepest/latest" section.
+    // Find the deepst/last node that starts on or before the current page
     for (const node of flat) {
       if (node.pageNumber !== null && node.pageNumber <= currentPage) {
         candidate = node;
@@ -61,31 +64,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Scroll active item into view
   useEffect(() => {
-    // Small timeout to allow render to complete and refs to update
-    const timeoutId = setTimeout(() => {
-      if (activeItemRef.current && scrollRef.current) {
-        const parent = scrollRef.current;
-        const element = activeItemRef.current;
-        
-        const parentTop = parent.scrollTop;
-        const parentBottom = parentTop + parent.clientHeight;
-        const elementTop = element.offsetTop;
-        const elementBottom = elementTop + element.clientHeight;
+    if (activeTab === 'chapters' && activeChapterNode) {
+        // Generate a key based on title+page to find the ref
+        const key = `${activeChapterNode.title}-${activeChapterNode.pageNumber}`;
+        const element = chapterRefs.current.get(key);
 
-        // Scroll if out of view
-        if (elementTop < parentTop || elementBottom > parentBottom) {
-          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (element && scrollRef.current) {
+            const parent = scrollRef.current;
+            const parentTop = parent.scrollTop;
+            const parentBottom = parentTop + parent.clientHeight;
+            const elementTop = element.offsetTop;
+            const elementBottom = elementTop + element.clientHeight;
+
+            // Scroll if out of view
+            if (elementTop < parentTop + 20 || elementBottom > parentBottom - 20) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
         }
-      }
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
-  }, [currentIndex, activeTab, activeChapterNode]); // Re-run when active chapter changes
+    }
+  }, [activeChapterNode, activeTab]);
 
   const handleChapterClick = (pageNumber: number | null) => {
     if (pageNumber === null) return;
-    // Find the first chunk that belongs to this page
+    
+    // Find the first chunk that matches or is closest after the chapter start page
+    // This handles cases where the text might start slightly after the page break
     const targetIndex = chunks.findIndex(c => c.pageNumber >= pageNumber);
+    
     if (targetIndex !== -1) {
       onChunkSelect(targetIndex);
       onCloseMobile();
@@ -93,16 +98,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const sidebarClasses = `
-    fixed inset-y-0 left-0 z-40 w-80 bg-gray-900 border-r border-gray-800 transform transition-transform duration-300 ease-in-out flex flex-col
+    absolute inset-y-0 left-0 z-40 w-80 bg-gray-900 border-r border-gray-800 transform transition-transform duration-300 ease-in-out flex flex-col h-full
     ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-    md:translate-x-0 md:static md:h-[calc(100vh-64px)]
+    md:translate-x-0 md:static md:h-full
   `;
 
   return (
     <>
       {isOpen && (
         <div 
-          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          className="absolute inset-0 bg-black/50 z-30 md:hidden"
           onClick={onCloseMobile}
         />
       )}
@@ -146,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                  onSelect={handleChapterClick} 
                  level={0} 
                  activeNode={activeChapterNode}
-                 activeRef={activeItemRef}
+                 chapterRefs={chapterRefs}
                />
             </div>
           )}
@@ -156,10 +161,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="space-y-1 pb-10">
               {chunks.map((chunk, index) => {
                 const isActive = index === currentIndex;
+                const activeRef = useRef<HTMLDivElement>(null);
+
+                // Auto scroll segments
+                useEffect(() => {
+                  if (isActive && activeRef.current && activeTab === 'segments') {
+                      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }
+                }, [isActive]);
+
                 return (
                   <div
                     key={chunk.id}
-                    ref={isActive ? activeItemRef : null}
+                    ref={activeRef}
                     onClick={() => {
                       onChunkSelect(index);
                       onCloseMobile();
@@ -175,8 +189,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <span>#{index + 1}</span>
                       <span>Page {chunk.pageNumber}</span>
                     </div>
-                    <span className="line-clamp-2">
-                      {chunk.text.substring(0, 60)}...
+                    <span className="line-clamp-2 leading-relaxed">
+                      {chunk.text.substring(0, 80)}...
                     </span>
                   </div>
                 );
@@ -195,37 +209,45 @@ const OutlineList: React.FC<{
   onSelect: (page: number | null) => void,
   level: number,
   activeNode: PdfOutline | null,
-  activeRef: React.RefObject<HTMLDivElement>
-}> = ({ nodes, onSelect, level, activeNode, activeRef }) => {
+  chapterRefs: React.MutableRefObject<Map<string, HTMLDivElement>>
+}> = ({ nodes, onSelect, level, activeNode, chapterRefs }) => {
   if (!nodes || nodes.length === 0) return null;
 
   return (
     <>
       {nodes.map((node, i) => {
         const isActive = node === activeNode;
-        // Also highlight if it's a parent of active? (Optional complexity, sticking to single active item for now)
+        const key = `${node.title}-${node.pageNumber}`;
         
         return (
         <React.Fragment key={i}>
           <div
-            ref={isActive ? activeRef : null}
+            ref={(el) => {
+                if (el) chapterRefs.current.set(key, el);
+                else chapterRefs.current.delete(key);
+            }}
             onClick={() => onSelect(node.pageNumber)}
             className={`
-              group flex items-center py-2 px-3 rounded cursor-pointer transition-colors border-l-2
+              group flex items-center py-2 px-3 rounded cursor-pointer transition-all duration-200 border-l-2 relative
               ${isActive 
-                ? 'bg-emerald-900/20 border-emerald-500 text-emerald-100' 
+                ? 'bg-emerald-900/30 border-emerald-500 text-emerald-100' 
                 : 'border-transparent hover:bg-gray-800/60 text-gray-400 hover:text-gray-200'}
               ${node.pageNumber === null ? 'opacity-50 cursor-default' : ''}
             `}
-            style={{ paddingLeft: `${(level * 12) + 12}px` }}
+            style={{ 
+                paddingLeft: `${(level * 12) + 12}px`,
+                marginLeft: `${level > 0 ? 4 : 0}px`
+            }}
           >
              {/* Bullet / Icon */}
-             <span className={`w-1.5 h-1.5 rounded-full mr-3 flex-shrink-0 transition-colors ${
-                 isActive ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-gray-600 group-hover:bg-gray-500'
+             <span className={`w-1.5 h-1.5 rounded-full mr-3 flex-shrink-0 transition-all ${
+                 isActive 
+                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] scale-125' 
+                    : 'bg-gray-600 group-hover:bg-gray-500'
              }`}></span>
              
              <div className="flex-1 min-w-0">
-                <p className={`text-sm truncate ${isActive ? 'font-medium' : 'font-normal'}`}>
+                <p className={`text-sm truncate ${isActive ? 'font-semibold' : 'font-normal'}`}>
                   {node.title}
                 </p>
                 {node.pageNumber && (
@@ -234,6 +256,11 @@ const OutlineList: React.FC<{
                    </p>
                 )}
              </div>
+             
+             {/* Active indicator bar on the right */}
+             {isActive && (
+                 <div className="absolute right-2 w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
+             )}
           </div>
           
           {/* Recursion */}
@@ -243,7 +270,7 @@ const OutlineList: React.FC<{
                 onSelect={onSelect} 
                 level={level + 1} 
                 activeNode={activeNode}
-                activeRef={activeRef}
+                chapterRefs={chapterRefs}
             />
           )}
         </React.Fragment>

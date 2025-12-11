@@ -146,13 +146,13 @@ export const Controls: React.FC<ControlsProps> = ({
   // --- Layouts ---
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur-md border-t border-gray-800 z-50 transition-all duration-300">
+    <div className="w-full bg-gray-900/95 backdrop-blur-md border-t border-gray-800 z-50 flex-none transition-all duration-300 relative">
       
       {/* Mobile Handle */}
       <div className="md:hidden w-full flex justify-center -mt-3">
          <button 
            onClick={() => setIsExpanded(!isExpanded)}
-           className="bg-gray-800 border border-gray-700 rounded-full p-1 text-gray-400 hover:text-white shadow-lg"
+           className="bg-gray-800 border border-gray-700 rounded-full p-1 text-gray-400 hover:text-white shadow-lg relative z-50"
          >
            {isExpanded ? (
              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
