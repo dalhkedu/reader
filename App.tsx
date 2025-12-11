@@ -36,6 +36,7 @@ export default function App() {
   const [outline, setOutline] = useState<PdfOutline[]>([]);
   const [metadata, setMetadata] = useState<PdfMetadata | undefined>(undefined);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [maxReadIndex, setMaxReadIndex] = useState<number>(-1); // Tracks the furthest read paragraph
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
@@ -88,13 +89,14 @@ export default function App() {
     currentIndexRef.current = currentIndex;
   }, [isPlaying, currentIndex]);
 
-  // Persist Progress
+  // Persist Progress (Max Read Index)
   useEffect(() => {
     // We only save if we have a valid book ID and we've actually loaded the book
     if (activeBookId) {
-      updateProgress(activeBookId, currentIndex).catch(console.error);
+      // We save the MAX read index as the "progress" of the book
+      updateProgress(activeBookId, maxReadIndex).catch(console.error);
     }
-  }, [currentIndex, activeBookId]);
+  }, [maxReadIndex, activeBookId]);
 
   // Handle HTML Audio Ended
   useEffect(() => {
@@ -105,7 +107,12 @@ export default function App() {
   }, [chunks.length]);
 
   const handleNextChunk = () => {
-    const nextIndex = currentIndexRef.current + 1;
+    const current = currentIndexRef.current;
+    
+    // Mark the finished chunk as read if it wasn't already
+    setMaxReadIndex(prev => Math.max(prev, current));
+
+    const nextIndex = current + 1;
     if (nextIndex < chunks.length) {
       setCurrentIndex(nextIndex);
     } else {
@@ -168,8 +175,16 @@ export default function App() {
     setOutline(book.outline);
     setMetadata(book.metadata);
     
-    // 3. Resume from history (default to 0 if new)
-    setCurrentIndex(book.progressIndex || 0);
+    // 3. Resume from history
+    // progressIndex in DB is now treated as maxReadIndex
+    const savedProgress = book.progressIndex ?? -1;
+    setMaxReadIndex(savedProgress);
+    
+    // Resume playback at the saved position (or 0)
+    // If savedProgress is -1 (new book), start at 0.
+    // If savedProgress is 5 (read 0-5), we start at 5 (re-read last?) or 6?
+    // Let's safe bet: Start at the last read position so context isn't lost.
+    setCurrentIndex(savedProgress < 0 ? 0 : savedProgress);
     
     // 4. Switch View
     setCurrentView('reader');
@@ -186,6 +201,17 @@ export default function App() {
   const handleDeleteBook = async (id: string) => {
     await deleteBook(id);
     loadLibrary();
+  };
+
+  const handleToggleRead = (index: number) => {
+    if (index <= maxReadIndex) {
+      // Uncheck: If I uncheck index 5, it means I haven't read 5.
+      // So max read becomes 4 (index - 1).
+      setMaxReadIndex(index - 1);
+    } else {
+      // Check: If I check index 5, it means I have read up to 5.
+      setMaxReadIndex(index);
+    }
   };
 
   // --- GEMINI PLAYBACK LOGIC ---
@@ -305,11 +331,6 @@ export default function App() {
 
   const confirmJump = () => {
     if (pendingJumpIndex !== null) {
-      // If we are switching, we might need to stop current audio depending on implementation, 
-      // but useEffect [currentIndex] handles logic.
-      // However, we must ensure 'isPlaying' remains true or is set to true if that was the intent.
-      // The requirement says "change paragraph", so we assume play continues from there.
-      
       setCurrentIndex(pendingJumpIndex);
       setPendingJumpIndex(null);
       
@@ -324,7 +345,6 @@ export default function App() {
 
   const cancelJump = () => {
     setPendingJumpIndex(null);
-    // Do nothing else; playback continues interrupted.
   };
 
   const handleReset = () => {
@@ -472,8 +492,10 @@ export default function App() {
               <main className="flex-1 overflow-y-auto relative w-full">
                 <ReaderView 
                   chunks={chunks} 
-                  currentIndex={currentIndex} 
+                  currentIndex={currentIndex}
+                  maxReadIndex={maxReadIndex}
                   onChunkSelect={handleChunkSelect} 
+                  onToggleRead={handleToggleRead}
                 />
               </main>
            </>
